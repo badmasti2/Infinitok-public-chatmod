@@ -278,6 +278,21 @@
 + (BOOL)exactTimestamp {
     return [[NSUserDefaults standardUserDefaults] boolForKey:@"exact_timestamp"];
 }
++ (BOOL)blurPanels {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:@"blur_panels"];
+}
++ (NSString *)blurPanelStyle {
+    NSString *v = [[NSUserDefaults standardUserDefaults] stringForKey:@"blur_panel_style"];
+    return v.length ? v : @"dark";
+}
++ (CGFloat)blurPanelIntensity {
+    NSString *v = [[NSUserDefaults standardUserDefaults] stringForKey:@"blur_panel_intensity"];
+    return v.length ? MAX(0.0, MIN(1.0, v.doubleValue / 100.0)) : 0.75;
+}
++ (CGFloat)blurPanelDim {
+    NSString *v = [[NSUserDefaults standardUserDefaults] stringForKey:@"blur_panel_dim"];
+    return v.length ? MAX(0.0, MIN(0.8, v.doubleValue / 100.0)) : 0.15;
+}
 + (BOOL)oledMode {
     return [[NSUserDefaults standardUserDefaults] boolForKey:@"oled_mode"];
 }

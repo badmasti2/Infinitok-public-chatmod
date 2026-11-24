@@ -96,6 +96,10 @@
 + (BOOL)enableCommentRepost;
 + (BOOL)customAccentColor;
 + (BOOL)buttonsOnRight;
++ (BOOL)blurPanels;
++ (NSString *)blurPanelStyle;
++ (CGFloat)blurPanelIntensity;
++ (CGFloat)blurPanelDim;
 + (BOOL)hideElementsGlobally;
 + (void)showSaveVC:(id)item;
 + (void)cleanCache;

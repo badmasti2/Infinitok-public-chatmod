@@ -1595,6 +1595,124 @@ static void InfinitokForceBioLinkSafariRedirect(void) {
 }
 %end
 
+
+#pragma mark - Blurred video behind menus
+
+static const void *kInfinitokBlurOverlayKey = &kInfinitokBlurOverlayKey;
+
+// Panels that make TikTok shrink the video. Matched by class-name fragment so it keeps working across versions.
+// Turn on Debug Logging to see the class names of any panel that is not matched ([blurpanel] tag), then add a fragment here.
+static BOOL InfinitokIsBlurPanelController(UIViewController *vc) {
+    NSString *name = NSStringFromClass([vc class]);
+    if (!([name hasPrefix:@"TTK"] || [name hasPrefix:@"AWE"] || [name hasPrefix:@"TUX"])) return NO;
+    static NSArray<NSString *> *fragments;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        fragments = @[@"CommentPanel", @"SharePanel", @"ShareViewController", @"ShareContainer",
+                      @"ActionSheet", @"ReportPanel", @"MorePanel", @"PanelViewController"];
+    });
+    for (NSString *f in fragments) {
+        if ([name rangeOfString:f].location != NSNotFound) return YES;
+    }
+    return NO;
+}
+
+static UIWindow *InfinitokBlurHostWindow(UIViewController *vc) {
+    if (vc.view.window) return vc.view.window;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            if (w.isKeyWindow) return w;
+        }
+    }
+    return nil;
+}
+
+static UIBlurEffectStyle InfinitokBlurEffectStyle(void) {
+    NSString *style = [BHIManager blurPanelStyle];
+    if ([style isEqualToString:@"light"]) return UIBlurEffectStyleLight;
+    if ([style isEqualToString:@"system"]) return UIBlurEffectStyleSystemMaterial;
+    return UIBlurEffectStyleDark;
+}
+
+static void InfinitokInstallBlurOverlay(UIViewController *vc) {
+    if (objc_getAssociatedObject(vc, kInfinitokBlurOverlayKey)) return;
+    UIView *host = vc.view.superview;
+    UIWindow *window = InfinitokBlurHostWindow(vc);
+    if (!host || !window) {
+        ITDebug("blurpanel", @"no host/window for %@", NSStringFromClass([vc class]));
+        return;
+    }
+
+    // Capture the full-size video before TikTok starts shrinking it. The panel's own view is hidden for the capture.
+    BOOL wasHidden = vc.view.hidden;
+    vc.view.hidden = YES;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithBounds:window.bounds];
+    UIImage *snapshot = [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        [window drawViewHierarchyInRect:window.bounds afterScreenUpdates:NO];
+    }];
+    vc.view.hidden = wasHidden;
+    if (!snapshot) return;
+
+    UIView *overlay = [[UIView alloc] initWithFrame:[host convertRect:window.bounds fromView:window]];
+    overlay.userInteractionEnabled = NO;
+    overlay.clipsToBounds = YES;
+    overlay.alpha = 0;
+
+    UIImageView *image = [[UIImageView alloc] initWithFrame:overlay.bounds];
+    image.image = snapshot;
+    image.contentMode = UIViewContentModeScaleAspectFill;
+    image.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [overlay addSubview:image];
+
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:InfinitokBlurEffectStyle()]];
+    blur.frame = overlay.bounds;
+    blur.alpha = [BHIManager blurPanelIntensity];
+    blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [overlay addSubview:blur];
+
+    CGFloat dim = [BHIManager blurPanelDim];
+    if (dim > 0) {
+        UIView *dimView = [[UIView alloc] initWithFrame:overlay.bounds];
+        dimView.backgroundColor = [UIColor colorWithWhite:0 alpha:dim];
+        dimView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [overlay addSubview:dimView];
+    }
+
+    [host insertSubview:overlay belowSubview:vc.view];
+    objc_setAssociatedObject(vc, kInfinitokBlurOverlayKey, overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [UIView animateWithDuration:0.2 animations:^{ overlay.alpha = 1; }];
+    ITDebug("blurpanel", @"blur overlay installed behind %@", NSStringFromClass([vc class]));
+}
+
+static void InfinitokRemoveBlurOverlay(UIViewController *vc) {
+    UIView *overlay = objc_getAssociatedObject(vc, kInfinitokBlurOverlayKey);
+    if (!overlay) return;
+    objc_setAssociatedObject(vc, kInfinitokBlurOverlayKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [UIView animateWithDuration:0.2 animations:^{ overlay.alpha = 0; } completion:^(BOOL finished) {
+        [overlay removeFromSuperview];
+    }];
+}
+
+%hook UIViewController
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    if (![BHIManager blurPanels]) return;
+    NSString *name = NSStringFromClass([self class]);
+    if (InfinitokIsBlurPanelController(self)) {
+        InfinitokInstallBlurOverlay(self);
+    } else if (InfinitokDebugLoggingEnabled() && ([name hasPrefix:@"TTK"] || [name hasPrefix:@"AWE"] || [name hasPrefix:@"TUX"])
+               && ([name rangeOfString:@"Panel"].location != NSNotFound || [name rangeOfString:@"Share"].location != NSNotFound
+                   || [name rangeOfString:@"Sheet"].location != NSNotFound)) {
+        ITLog("blurpanel", @"unmatched candidate panel class: %@", name);
+    }
+}
+- (void)viewWillDisappear:(BOOL)animated {
+    %orig;
+    InfinitokRemoveBlurOverlay(self);
+}
+%end
+
 static NSString *InfinitokRegionField(NSString *api, NSString *field, NSString *orig, BOOL lowercase) {
     if (![BHIManager regionChangingEnabled]) {
         return orig;
