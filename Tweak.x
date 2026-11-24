@@ -1694,18 +1694,48 @@ static void InfinitokRemoveBlurOverlay(UIViewController *vc) {
     }];
 }
 
+// Debug: dumps big or transformed views so the video container that shrinks can be identified from the log.
+static void InfinitokDumpViewTree(UIView *v, NSInteger depth, NSInteger *budget, NSString *label) {
+    if (*budget <= 0 || depth > 14) return;
+    BOOL big = v.bounds.size.width >= 120 && v.bounds.size.height >= 120;
+    BOOL xf = !CGAffineTransformIsIdentity(v.transform);
+    if (big || xf) {
+        (*budget)--;
+        NSString *indent = [@"" stringByPaddingToLength:depth * 2 withString:@" " startingAtIndex:0];
+        ITLog("viewtree", @"%@ %@%@ frame=%@%@%@", label, indent, NSStringFromClass([v class]),
+              NSStringFromCGRect(v.frame), xf ? [NSString stringWithFormat:@" TRANSFORM=%@", NSStringFromCGAffineTransform(v.transform)] : @"",
+              v.hidden ? @" hidden" : @"");
+    }
+    for (UIView *sub in v.subviews) InfinitokDumpViewTree(sub, depth + 1, budget, label);
+}
+
+static void InfinitokDumpWindowTree(UIWindow *w, NSString *label) {
+    NSInteger budget = 400;
+    ITLog("viewtree", @"===== %@ =====", label);
+    InfinitokDumpViewTree(w, 0, &budget, label);
+}
+
 %hook UIViewController
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
-    if (![BHIManager blurPanels]) return;
     NSString *name = NSStringFromClass([self class]);
-    if (InfinitokIsBlurPanelController(self)) {
-        InfinitokInstallBlurOverlay(self);
-    } else if (InfinitokDebugLoggingEnabled() && ([name hasPrefix:@"TTK"] || [name hasPrefix:@"AWE"] || [name hasPrefix:@"TUX"])
-               && ([name rangeOfString:@"Panel"].location != NSNotFound || [name rangeOfString:@"Share"].location != NSNotFound
-                   || [name rangeOfString:@"Sheet"].location != NSNotFound)) {
-        ITLog("blurpanel", @"unmatched candidate panel class: %@", name);
+    BOOL tiktokClass = [name hasPrefix:@"TTK"] || [name hasPrefix:@"AWE"] || [name hasPrefix:@"TUX"];
+    BOOL matched = tiktokClass && InfinitokIsBlurPanelController(self);
+    BOOL candidate = tiktokClass && ([name rangeOfString:@"Panel"].location != NSNotFound || [name rangeOfString:@"Share"].location != NSNotFound
+                                      || [name rangeOfString:@"Sheet"].location != NSNotFound);
+    if (InfinitokDebugLoggingEnabled() && (matched || candidate)) {
+        ITLog("blurpanel", @"panel appearing: %@ (matched=%d)", name, matched);
+        UIWindow *w = InfinitokBlurHostWindow(self);
+        if (w) {
+            NSString *tag = [NSString stringWithFormat:@"%@", name];
+            InfinitokDumpWindowTree(w, [@"BEFORE " stringByAppendingString:tag]);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                InfinitokDumpWindowTree(w, [@"AFTER " stringByAppendingString:tag]);
+            });
+        }
     }
+    if (![BHIManager blurPanels]) return;
+    if (matched) InfinitokInstallBlurOverlay(self);
 }
 - (void)viewWillDisappear:(BOOL)animated {
     %orig;
